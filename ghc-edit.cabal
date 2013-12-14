@@ -1,0 +1,26 @@
+Name:           ghc-edit
+Version:        0.0
+Stability:      experimental
+Description:    Python wrapper around ghc-mod, haskell-src-exts and other Haskell libraries to provide code completion and syntax highlighting in VIM.
+License:        MIT
+License-file:   LICENSE
+Author:         Handré Petrus Stolp
+Maintainer:     HanStolpo@gmail.com
+Build-Type:     Simple
+Cabal-Version:  >= 1.10
+
+Library 
+    Default-Language:   Haskell2010
+    GHC-Options:        -Wall
+    Exposed-Modules:    Language.Haskell.GhcEdit
+--    Other-Modules:      
+    build-depends:      base >= 4.0 && < 5, ghc-mod, haskell-src-exts, ghc
+
+Executable ghc-edit
+    Default-Language:    Haskell2010
+    GHC-Options:        -Wall
+    Main-Is:             GhcEdit.hs
+    -- Other-Modules:        Paths_ghc_edit
+    GHC-Options:         -Wall
+    HS-Source-Dirs:      src
+    Build-Depends:       base >= 4.0 && < 5 , ghc-edit
