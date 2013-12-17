@@ -7,3 +7,6 @@ cabal-dev
 .virthualenv
 
 *.swp
+/.cabal-sandbox
+/cabal.sandbox.config
+/ghc-edit.dll

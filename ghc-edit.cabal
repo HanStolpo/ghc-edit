@@ -18,9 +18,10 @@ Library
 
 Executable ghc-edit
     Default-Language:    Haskell2010
-    GHC-Options:        -Wall
-    Main-Is:             GhcEdit.hs
-    -- Other-Modules:        Paths_ghc_edit
+    HS-Source-Dirs:      src, .
     GHC-Options:         -Wall
-    HS-Source-Dirs:      src
+    ld-options:          -shared -o ghc-edit.dll 
+    Main-Is:             GhcEdit.hs
+    c-sources:           GhcEdit.c
+    -- Other-Modules:        Paths_ghc_edit
     Build-Depends:       base >= 4.0 && < 5 , ghc-edit
