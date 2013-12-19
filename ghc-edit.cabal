@@ -6,6 +6,7 @@ License:        MIT
 License-file:   LICENSE
 Author:         Handré Petrus Stolp
 Maintainer:     HanStolpo@gmail.com
+-- Build-Type:     Custom
 Build-Type:     Simple
 Cabal-Version:  >= 1.10
 
@@ -14,14 +15,24 @@ Library
     GHC-Options:        -Wall
     Exposed-Modules:    Language.Haskell.GhcEdit
 --    Other-Modules:      
-    build-depends:      base >= 4.0 && < 5, ghc-mod, haskell-src-exts, ghc
+    build-depends:      base >= 4.0 && < 5, ghc-mod, haskell-src-exts, ghc, Cabal
 
 Executable ghc-edit
     Default-Language:    Haskell2010
-    HS-Source-Dirs:      src, .
+    -- progSuffix:       .dll
+    -- exe-name:         ghc-edit.dll    
+    HS-Source-Dirs:      src 
     GHC-Options:         -Wall
-    ld-options:          -shared -o ghc-edit.dll 
+    ld-options:          -shared
     Main-Is:             GhcEdit.hs
-    c-sources:           GhcEdit.c
+    c-sources:           src/GhcEdit.c
     -- Other-Modules:        Paths_ghc_edit
     Build-Depends:       base >= 4.0 && < 5 , ghc-edit
+
+Test-Suite test
+    Default-Language:   Haskell2010
+    type:               detailed-0.9
+    HS-Source-Dirs:     test
+    test-module:        Test
+    other-modules:      Exp
+    build-depends:      base, ghc-edit, haskell-src-exts, Cabal >= 1.9.2, GenericPretty

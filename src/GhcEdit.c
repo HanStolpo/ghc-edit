@@ -1,7 +1,7 @@
 // StartEnd.c
 #include <Rts.h>
 
-void GhcEditStart()
+int GhcEditStart()
 {
    int argc = 1;
    char* argv[] = {"ghc-edit-dll", NULL}; // argv must end with NULL
@@ -9,9 +9,11 @@ void GhcEditStart()
    // Initialize Haskell runtime
    char** args = argv;
    hs_init(&argc, &args);
+   return 1;
 }
 
-void GhcEditEnd()
+int GhcEditEnd()
 {
    hs_exit();
+   return 1;
 }
