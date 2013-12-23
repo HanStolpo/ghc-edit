@@ -35,4 +35,4 @@ Test-Suite test
     HS-Source-Dirs:     test
     test-module:        Test
     other-modules:      Exp
-    build-depends:      base, ghc-edit, haskell-src-exts, Cabal >= 1.9.2, GenericPretty
+    build-depends:      base, ghc-edit, haskell-src-exts, Cabal >= 1.9.2, GenericPretty, containers
