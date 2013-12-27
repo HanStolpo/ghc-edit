@@ -9,27 +9,78 @@ import Control.Applicative
 import Control.Arrow
 import Text.PrettyPrint.GenericPretty
 import Data.List
+import Data.Char
 import Debug.Trace
 
 
 try :: IO ()
 try = do
     putStrLn "begin"
-    ParseOk (m, cms) <- parseFileContentsWithComments defaultParseMode{parseFilename = "Blah.hs"} <$> readFile "./test/Data/Blah.hs"
-    pp . sort $ map hlComment cms ++ hlModule m
+    s <-readFile "./test/Data/Blah.hs"
+    let ParseOk (m, cms) = parseFileContentsWithComments defaultParseMode{parseFilename = "Blah.hs"}  s
+        hl = sort $ map hlComment cms ++ hlModule m
+    putStrLn . pr hl $ s
+--    putStrLn (prty . show $ hl)
     putStrLn "done"
+
+pr :: [Highlight] -> String -> String
+pr hl = drop 1 . reverse . fst . foldl _scan ("1", (hl, 1,0)) 
+    where
+    _scan (s@(chp:_), st) ch = case ch of
+            '\n' -> _ignore (s, if chp == '\r' then st else  _incL st) ch
+            '\r' -> _ignore (s, if chp == '\n' then st else  _incL st) ch 
+            '\t' -> _ignore (s, head . drop 8 . iterate _incC $ st) ch
+            _    -> if isSpace ch then _ignore (s, _incC st) ch else   _proc (s, _discard . _incC $ st) $ ch
+    _scan x _ = error $ "_scan mis match " ++ show x
+
+
+    _incL (hs, l, _) = (hs, l + 1, 0)
+    _incC (hs, l, c) = (hs, l, c + 1)
+    _discard x@([],_,_) = x
+    _discard (h:hs, l, c) | hlEnd h <= (l,c) =  _discard (hs, l, c) 
+                          | otherwise = (h:hs, l, c)
+    _discard' (s, st) = (s, _discard st)
+
+    _ignore (s, st) ch = (ch:s, st)
+
+    _proc (s, st@([],_,_)) ch = (ch : s, st)
+    _proc (s, st@(h:_, l, c)) ch  = (_end (ch : _start s h l c) h l c, st)
+    _start s h l c | hlStart h == (l,c) = foldl (flip (:)) s (_hlO . hlType $ h)
+                   | otherwise = s
+    _end s h l c | hlEnd h == (l,c+1) =  foldl (flip (:)) s (_hlC . hlType $ h)
+                 | otherwise = s
+
+    _hlO  = (++"|") . ("<"++) . _hlId
+    _hlC  = (++">") . ("|"++) . _hlId
+    _hlId hlt = case hlt of
+                HlComment       -> "co"
+                HlModuleName    -> "mn"
+                HlKeyword       -> "kw"
+                HlImport        -> "im"
+                HlPragma        -> "pr"
+                HlBrace         -> "br"
+                HlComma         -> "cm"
+                HlElipse        -> "el"
+                HlIdentType     -> "it"
+                HlIdentFunc     -> "if"
+                HlSymbolType    -> "st"
+                HlSymbolFunc    -> "sf"
+                HlSpecialCon    -> "sc"
+                HlOpType        -> "ot"
+                HlOpFunc        -> "of"
+                HlOther         -> "__"
+
 
 type LnCol = (Int, Int)
 data Highlight = Highlight  { hlStart :: LnCol
                             , hlEnd   :: LnCol
                             , hlType  :: HighlightType
-                            , hlCnt   :: String
                             }
                             deriving (Show, Eq, Ord, Generic)
 instance Out Highlight
 
 defaultHighlight :: Highlight
-defaultHighlight = Highlight (0,0) (0,0) HlOther ""
+defaultHighlight = Highlight (0,0) (0,0) HlOther
 
 data HighlightType  = HlComment 
                     | HlModuleName
@@ -60,15 +111,17 @@ prty = fst . foldl f ("", "")
                     | c `elem` "," =  (s ++ "\n" ++ pfx ++ [c], pfx)
                     | otherwise = (s ++ [c], pfx)
 
-hlSrcSpan :: SrcSpan -> Highlight
-hlSrcSpan SrcSpan {..} = defaultHighlight { hlStart =  (srcSpanStartLine, srcSpanStartColumn) 
-                                          , hlEnd =  (srcSpanEndLine, srcSpanEndColumn) }
+hlSrcSpan :: HighlightType -> SrcSpan -> Highlight
+hlSrcSpan t SrcSpan {..} = defaultHighlight { hlStart =  (srcSpanStartLine, srcSpanStartColumn) 
+                                            , hlEnd =  (srcSpanEndLine, srcSpanEndColumn) 
+                                            , hlType = t
+                                            }
 
-hlSrcSpanInfo :: SrcSpanInfo -> Highlight
-hlSrcSpanInfo = hlSrcSpan . srcInfoSpan 
+hlSrcSpanInfo :: HighlightType -> SrcSpanInfo -> Highlight
+hlSrcSpanInfo t = hlSrcSpan t . srcInfoSpan 
 
 hlComment :: Comment -> Highlight
-hlComment (Comment ml sp c) = (hlSrcSpan sp) {hlType = HlComment, hlCnt = if ml then "{-" ++ c ++ "-}" else "--" ++ c}
+hlComment (Comment ml sp c) = hlSrcSpan HlComment sp
 
 type SPI = SrcSpanInfo
 
@@ -85,21 +138,16 @@ hlModuleHead (Just (ModuleHead l mName mWarning mExpList)) = [mImport, hlModuleN
                                                            ++ hlWarningText mWarning
                                                            ++ hlExportSpecList mExpList
     where
-        [mImport', mWhere'] = map ((\x -> x{hlType = HlKeyword}) . hlSrcSpan) . srcInfoPoints $ l
-        mImport = mImport'{hlCnt = "import"}
-        mWhere = mWhere'{hlCnt = "where"}
+        [mImport, mWhere] = map (hlSrcSpan HlKeyword) . srcInfoPoints $ l
 
 hlModuleName :: ModuleName SPI -> Highlight
-hlModuleName (ModuleName i n) = (hlSrcSpanInfo i){hlType = HlModuleName, hlCnt = n}
+hlModuleName (ModuleName i _) = hlSrcSpanInfo HlModuleName i
 
 hlWarningText :: Maybe (WarningText SPI) -> [Highlight]
 hlWarningText x = case x of
     Nothing                 -> []
-    Just (DeprText i s) -> [mk "DEPRECATED" i s]
-    Just (WarnText i s) -> [mk "WARNING" i s]
-    where
-        -- TODO: Fill in correctly
-        mk pfx i s = (hlSrcSpanInfo i){hlType = HlPragma, hlCnt = "{-#" ++ pfx ++ "\"" ++ s ++ "\"#-}"}
+    Just (DeprText i s) -> [hlSrcSpanInfo HlPragma i]
+    Just (WarnText i s) -> [hlSrcSpanInfo HlPragma i]
 
 
 hlExportSpecList :: Maybe (ExportSpecList SPI) -> [Highlight]
@@ -111,20 +159,20 @@ hlBracedExpr_ :: ([SrcSpan] -> ([Highlight], [SrcSpan])) -> SPI -> [Highlight]
 hlBracedExpr_ inner i = ob : cb : cs
     where
         (ph:ps) = srcInfoPoints $ i
-        ob = (hlSrcSpan ph){hlType = HlBrace, hlCnt = "("}
+        ob = hlSrcSpan HlBrace ph
         (cs, [pl]) = inner ps
-        cb = (hlSrcSpan pl){hlType = HlBrace, hlCnt =")"}
+        cb = hlSrcSpan HlBrace pl
 
 hlBracedListPunc :: SPI -> [Highlight]
-hlBracedListPunc  = hlBracedExpr_ cms
+hlBracedListPunc  =  hlBracedExpr_ cms
     where cms ps = foldl f ([],ps) ps
             where f (cs', ps') p = case drop 1 ps' of
                                         []   -> (cs', ps')
-                                        ps'' -> ((hlSrcSpan p){hlType = HlComma, hlCnt =","} : cs', ps'') 
+                                        ps'' -> (hlSrcSpan HlComma p : cs', ps'') 
 
 hlBracedElipse :: SPI -> [Highlight]
 hlBracedElipse  = hlBracedExpr_ cms
-    where cms (p:ps) = ([(hlSrcSpan p){hlType = HlElipse, hlCnt =".."}], ps) 
+    where cms (p:ps) = ([hlSrcSpan HlElipse p], ps) 
 
 hlExportSpec :: ExportSpec SPI -> [Highlight]
 hlExportSpec x = case x of
@@ -141,19 +189,19 @@ hlQName typeLevel x = case x of
     Special _ n  -> [hlSpecialCon n]
 
 hlName :: Bool -> Name SPI -> Highlight
-hlName True     (Ident i s)     = (hlSrcSpanInfo i){hlType = HlIdentType, hlCnt = s}
-hlName False    (Ident i s)     = (hlSrcSpanInfo i){hlType = HlIdentFunc, hlCnt = s}
-hlName True     (Symbol i s)    = (hlSrcSpanInfo i){hlType = HlSymbolType, hlCnt = s}
-hlName False    (Symbol i s)    = (hlSrcSpanInfo i){hlType = HlSymbolFunc, hlCnt = s}
+hlName True     (Ident i _)     = hlSrcSpanInfo HlIdentType i
+hlName False    (Ident i _)     = hlSrcSpanInfo HlIdentFunc i
+hlName True     (Symbol i _)    = hlSrcSpanInfo HlSymbolType i
+hlName False    (Symbol i _)    = hlSrcSpanInfo HlSymbolFunc i
 
 hlSpecialCon :: SpecialCon SPI -> Highlight
 hlSpecialCon x = case x of
-    UnitCon i           -> trace (("UnitCon" ++) . prty . show $ i) (hlSrcSpanInfo i){hlType = HlSpecialCon}
-    ListCon i           -> trace (("ListCon" ++) . prty . show $ i) (hlSrcSpanInfo i){hlType = HlSpecialCon}
-    FunCon i            -> trace (("FunCon" ++) . prty . show $ i) (hlSrcSpanInfo i){hlType = HlSpecialCon}
-    TupleCon i _ _      -> trace (("TupleCon" ++) . prty . show $ i) (hlSrcSpanInfo i){hlType = HlSpecialCon}
-    Cons i              -> trace (("Cons" ++) . prty . show $ i) (hlSrcSpanInfo i){hlType = HlSpecialCon}
-    UnboxedSingleCon i  -> trace (("UnboxedSingleCon" ++) . prty . show $ i) (hlSrcSpanInfo i){hlType = HlSpecialCon}
+    UnitCon i           -> trace (("UnitCon" ++) . prty . show $ i) hlSrcSpanInfo HlSpecialCon i
+    ListCon i           -> trace (("ListCon" ++) . prty . show $ i) hlSrcSpanInfo HlSpecialCon i
+    FunCon i            -> trace (("FunCon" ++) . prty . show $ i) hlSrcSpanInfo HlSpecialCon i
+    TupleCon i _ _      -> trace (("TupleCon" ++) . prty . show $ i) hlSrcSpanInfo HlSpecialCon i
+    Cons i              -> trace (("Cons" ++) . prty . show $ i) hlSrcSpanInfo HlSpecialCon i
+    UnboxedSingleCon i  -> trace (("UnboxedSingleCon" ++) . prty . show $ i) hlSrcSpanInfo HlSpecialCon i
 
 hlCName :: CName SPI -> Highlight
 hlCName x = case x of
@@ -163,28 +211,28 @@ hlCName x = case x of
 
 hlModulePragma :: ModulePragma SPI -> Highlight
 hlModulePragma x = case x of
-        LanguagePragma i _  -> (hlSrcSpanInfo i){hlType = HlPragma}
-        OptionsPragma i _ _ -> (hlSrcSpanInfo i){hlType = HlPragma}
-        AnnModulePragma i _ -> (hlSrcSpanInfo i){hlType = HlPragma}
+        LanguagePragma i _  -> hlSrcSpanInfo HlPragma i
+        OptionsPragma i _ _ -> hlSrcSpanInfo HlPragma i
+        AnnModulePragma i _ -> hlSrcSpanInfo HlPragma i
 
 hlImportDecl :: ImportDecl SPI -> [Highlight]
 hlImportDecl ImportDecl {..} =  [hlModuleName importModule] ++ _hlImprt ++ _hlSrc ++ _hlQual ++ _hlPkg ++ _hlAs ++ _hlSpec
     where
-        mk m = (:[]) . m . hlSrcSpan . head &&& drop 1
-        (_hlImprt, ps)      = mk (\i -> i{hlType = HlImport, hlCnt = "import"}) . srcInfoPoints $ importAnn
+        mk t = (:[]) . hlSrcSpan t . head &&& drop 1
+        (_hlImprt, ps)      = mk HlImport . srcInfoPoints $ importAnn
         (_hlSrc, ps')       = case importSrc of 
-                                True  -> let ([b], _ps)  = mk (\i -> i{hlType = HlPragma}) ps
-                                             ([e], _ps') = mk id _ps
+                                True  -> let ([b], _ps)  = mk HlPragma ps
+                                             ([e], _ps') = mk HlOther _ps
                                          in  ([b{hlEnd = hlEnd e}], _ps')
                                 False -> ([], ps)
         (_hlQual, ps'')     = case importQualified of
-                                True  -> mk (\i -> i{hlType = HlImport, hlCnt = "qualified"}) ps'
+                                True  -> mk HlImport ps'
                                 False -> ([], ps')
         (_hlPkg, ps''')     = case importPkg of
-                                Just s  -> mk (\i -> i{hlType = HlImport, hlCnt = s}) ps''
+                                Just s  -> mk HlImport ps''
                                 Nothing -> ([], ps'')
         _hlAs               = case importAs of
-                                Just mn  -> let (cs, _ps) =  mk (\i -> i{hlType = HlImport, hlCnt = "as"}) ps'''
+                                Just mn  -> let (cs, _ps) =  mk HlImport ps'''
                                             in hlModuleName mn : cs
                                 Nothing -> []
         _hlSpec             = case importSpecs of
@@ -198,7 +246,7 @@ hlImportDecl ImportDecl {..} =  [hlModuleName importModule] ++ _hlImprt ++ _hlSr
         _hlSpecPunc i hid  = case hid of
                                 False -> hlBracedListPunc i
                                 True  -> uncurry (:) .
-                                         ( (\h -> h{hlType = HlImport, hlCnt = "hiding"}) . hlSrcSpan . head 
+                                         ( hlSrcSpan HlImport . head 
                                          &&& hlBracedListPunc . (\p->i{srcInfoPoints =  p}) . drop 1
                                          ) . srcInfoPoints $ i
 
@@ -247,8 +295,8 @@ hlTyVarBind x = case x of
 
 hlKind :: Kind SPI -> [Highlight]
 hlKind x = case x of
-    KindStar i          -> [(hlSrcSpanInfo i){hlType = HlOpType, hlCnt = "*"}]
-    KindBang i          -> [(hlSrcSpanInfo i){hlType = HlOpType, hlCnt = "!"}]
+    KindStar i          -> [hlSrcSpanInfo HlOpType i]
+    KindBang i          -> [hlSrcSpanInfo HlOpType i]
     KindFn i k1 k2      -> trace (("KindFn\n" ++ ) . prty . show $ i) $ (hlKind k1 ++ hlKind k2)
     KindParen i k       -> trace (("KindParen\n" ++ ) . prty . show $ i) $ hlKind k 
     KindVar i n         -> [hlName True n]
