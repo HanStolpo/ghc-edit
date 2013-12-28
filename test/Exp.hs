@@ -10,6 +10,9 @@ import Control.Arrow
 import Text.PrettyPrint.GenericPretty
 import Data.List
 import Data.Char
+import Data.Maybe
+import Control.Conditional
+import Safe
 import Debug.Trace
 
 
@@ -17,8 +20,10 @@ try :: IO ()
 try = do
     putStrLn "begin"
     s <-readFile "./test/Data/Blah.hs"
-    let ParseOk (m, cms) = parseFileContentsWithComments defaultParseMode{parseFilename = "Blah.hs"}  s
-        hl = sort $ map hlComment cms ++ hlModule m
+    let (hl, e) = case parseFileContentsWithComments defaultParseMode{parseFilename = "Blah.hs"}  s of
+             ParseOk (m, cms) -> (sort $ map hlComment cms ++ hlModule m, [])
+             err -> ([], prty . show $ err)
+    putStrLn e
     putStrLn . pr hl $ s
 --    putStrLn (prty . show $ hl)
     putStrLn "done"
@@ -111,6 +116,9 @@ prty = fst . foldl f ("", "")
                     | c `elem` "," =  (s ++ "\n" ++ pfx ++ [c], pfx)
                     | otherwise = (s ++ [c], pfx)
 
+tracePrtyMsg :: Show a => String -> a -> b -> b
+tracePrtyMsg s a = trace ((s++) . prty . show $ a) 
+
 hlSrcSpan :: HighlightType -> SrcSpan -> Highlight
 hlSrcSpan t SrcSpan {..} = defaultHighlight { hlStart =  (srcSpanStartLine, srcSpanStartColumn) 
                                             , hlEnd =  (srcSpanEndLine, srcSpanEndColumn) 
@@ -121,7 +129,7 @@ hlSrcSpanInfo :: HighlightType -> SrcSpanInfo -> Highlight
 hlSrcSpanInfo t = hlSrcSpan t . srcInfoSpan 
 
 hlComment :: Comment -> Highlight
-hlComment (Comment ml sp c) = hlSrcSpan HlComment sp
+hlComment (Comment _ sp _) = hlSrcSpan HlComment sp
 
 type SPI = SrcSpanInfo
 
@@ -131,6 +139,7 @@ hlModule (XmlHybrid _ _ _ _ _ _ _ _ _) = error "not supporting XmlHybrid"
 hlModule (Module _ mHead mPragmas mImport decls) = hlModuleHead  mHead
                                                 ++ map hlModulePragma mPragmas
                                                 ++ concatMap hlImportDecl mImport
+                                                ++ concatMap hlDecl decls
 
 hlModuleHead :: Maybe (ModuleHead SPI) -> [Highlight]
 hlModuleHead Nothing = []
@@ -155,23 +164,25 @@ hlExportSpecList x = case x of
     Nothing -> []
     Just (ExportSpecList i es) -> hlBracedListPunc i ++ concatMap hlExportSpec es
 
-hlBracedExpr_ :: ([SrcSpan] -> ([Highlight], [SrcSpan])) -> SPI -> [Highlight]
-hlBracedExpr_ inner i = ob : cb : cs
+hlBracedExpr_ :: ([SrcSpan] -> ([Highlight], [SrcSpan])) -> [SrcSpan] -> [Highlight]
+hlBracedExpr_ inner (ph:ps) = ob : cb : cs
     where
-        (ph:ps) = srcInfoPoints $ i
         ob = hlSrcSpan HlBrace ph
-        (cs, [pl]) = inner ps
+        (cs, pl:_) = inner ps
         cb = hlSrcSpan HlBrace pl
 
 hlBracedListPunc :: SPI -> [Highlight]
-hlBracedListPunc  =  hlBracedExpr_ cms
+hlBracedListPunc  =  hlBracedListPunc'  . srcInfoPoints
+
+hlBracedListPunc' :: [SrcSpan] -> [Highlight]
+hlBracedListPunc' = hlBracedExpr_ cms
     where cms ps = foldl f ([],ps) ps
             where f (cs', ps') p = case drop 1 ps' of
                                         []   -> (cs', ps')
                                         ps'' -> (hlSrcSpan HlComma p : cs', ps'') 
 
 hlBracedElipse :: SPI -> [Highlight]
-hlBracedElipse  = hlBracedExpr_ cms
+hlBracedElipse  = hlBracedExpr_ cms . srcInfoPoints
     where cms (p:ps) = ([hlSrcSpan HlElipse p], ps) 
 
 hlExportSpec :: ExportSpec SPI -> [Highlight]
@@ -180,13 +191,17 @@ hlExportSpec x = case x of
     EAbs _ n            -> hlQName True n
     EThingAll i n       -> hlBracedElipse i ++ hlQName True n
     EThingWith i n cs   -> hlBracedListPunc i ++ hlQName True n ++ map hlCName cs
-    EModuleContents i n -> trace (("EModuleContents"++) . prty . show $ i) $ [hlModuleName n]
+    EModuleContents i n -> tracePrtyMsg "EModuleContents" i $ [hlModuleName n]
 
 hlQName :: Bool -> QName SPI -> [Highlight]
 hlQName typeLevel x = case x of
-    Qual _ mn n -> hlModuleName mn : hlName typeLevel n : []
+    Qual _ mn n -> _correct mn (hlModuleName mn) (hlName typeLevel n)
     UnQual _ n  -> [hlName typeLevel n]
     Special _ n  -> [hlSpecialCon n]
+    where 
+        _correct (ModuleName _ s) m n = m {hlEnd = (fst . hlEnd $ m, (snd . hlStart $ m) + length s + 1)} 
+                                      : n {hlStart = (fst . hlStart $ n, (snd . hlStart $ n) + length s + 1)} 
+                                      : []
 
 hlName :: Bool -> Name SPI -> Highlight
 hlName True     (Ident i _)     = hlSrcSpanInfo HlIdentType i
@@ -196,12 +211,12 @@ hlName False    (Symbol i _)    = hlSrcSpanInfo HlSymbolFunc i
 
 hlSpecialCon :: SpecialCon SPI -> Highlight
 hlSpecialCon x = case x of
-    UnitCon i           -> trace (("UnitCon" ++) . prty . show $ i) hlSrcSpanInfo HlSpecialCon i
-    ListCon i           -> trace (("ListCon" ++) . prty . show $ i) hlSrcSpanInfo HlSpecialCon i
-    FunCon i            -> trace (("FunCon" ++) . prty . show $ i) hlSrcSpanInfo HlSpecialCon i
-    TupleCon i _ _      -> trace (("TupleCon" ++) . prty . show $ i) hlSrcSpanInfo HlSpecialCon i
-    Cons i              -> trace (("Cons" ++) . prty . show $ i) hlSrcSpanInfo HlSpecialCon i
-    UnboxedSingleCon i  -> trace (("UnboxedSingleCon" ++) . prty . show $ i) hlSrcSpanInfo HlSpecialCon i
+    UnitCon i           -> tracePrtyMsg "UnitCon" i hlSrcSpanInfo HlSpecialCon i
+    ListCon i           -> tracePrtyMsg "ListCon" i hlSrcSpanInfo HlSpecialCon i
+    FunCon i            -> tracePrtyMsg "FunCon" i hlSrcSpanInfo HlSpecialCon i
+    TupleCon i _ _      -> tracePrtyMsg "TupleCon" i hlSrcSpanInfo HlSpecialCon i
+    Cons i              -> tracePrtyMsg "Cons" i hlSrcSpanInfo HlSpecialCon i
+    UnboxedSingleCon i  -> tracePrtyMsg "UnboxedSingleCon" i hlSrcSpanInfo HlSpecialCon i
 
 hlCName :: CName SPI -> Highlight
 hlCName x = case x of
@@ -253,34 +268,49 @@ hlImportDecl ImportDecl {..} =  [hlModuleName importModule] ++ _hlImprt ++ _hlSr
 
 hlDecl :: Decl SPI -> [Highlight]
 hlDecl x = case x of
-    TypeDecl i hd tp                 -> undefined
-    TypeFamDecl i hd knd             -> undefined
-    DataDecl i dn ctx hd qs dr       -> undefined
-    GDataDecl i dn ctx hd knd gds dr -> undefined
-    DataFamDecl i ctx hd knd         -> undefined
-    TypeInsDecl i tp1 tp2            -> undefined
-    DataInsDecl i dn tp qs dr        -> undefined
-    GDataInsDecl i dn tp knd gds dr  -> undefined
-    ClassDecl i ctx hd fds cds       -> undefined
-    InstDecl i ctx ihd  ids          -> undefined
-    DerivDecl i ctx ihd              -> undefined
-    InfixDecl i ass l ops            -> undefined
-    DefaultDecl i tp                 -> undefined
-    SpliceDecl i exp                 -> undefined
-    TypeSig i ns tp                  -> undefined
-    FunBind i ms                     -> undefined
-    PatBind i p mtp rhs bnds         -> undefined
-    ForImp i cv sfty s nm tp         -> undefined
-    ForExp i cv s nm tp              -> undefined
-    RulePragmaDecl i r               -> undefined
-    DeprPragmaDecl i ds              -> undefined
-    WarnPragmaDecl i ds              -> undefined
-    InlineSig i b act qnm            -> undefined
-    InlineConlikeSig i act qnm       -> undefined
-    SpecSig i act qnm tp             -> undefined
-    SpecInlineSig i b act qnm tp     -> undefined
-    InstSig i ctx ihd                -> undefined
-    AnnPragma i ann                  -> undefined
+    TypeDecl i hd tp                 -> let hl = hlSrcSpan HlKeyword
+                                            sps = srcInfoPoints i 
+                                            in (hl . head) sps : (hl . last) sps : hlDeclHead hd ++ hlTypE tp
+    TypeFamDecl i hd knd             -> (map (hlSrcSpan HlKeyword) . srcInfoPoints $ i) 
+                                     ++ hlDeclHead hd 
+                                     ++ maybe [] hlKind knd 
+    DataDecl i dn ctx hd qs dr       -> hlDataOrNew dn
+                                        : (map (hlSrcSpan HlKeyword) . srcInfoPoints $ i) 
+                                        ++ hlContext ctx
+                                        ++ hlDeclHead hd
+                                        ++ concatMap hlQualConDecl qs
+                                        ++ hlDeriving dr
+    GDataDecl i dn ctx hd knd gds dr -> hlDataOrNew dn
+                                        : (map (hlSrcSpan HlKeyword) . srcInfoPoints $ i) 
+                                        ++ hlContext ctx
+                                        ++ hlDeclHead hd
+                                        ++ maybe [] hlKind knd 
+                                        ++ concatMap hlGadtDecl gds 
+                                        ++ hlDeriving dr
+    DataFamDecl i ctx hd knd         -> tracePrtyMsg "DataFamDecl" i hlContext ctx ++ hlDeclHead hd ++ maybe [] hlKind knd
+    TypeInsDecl i tp1 tp2            -> tracePrtyMsg "TypeInstDecl" i hlTypE tp1 ++ hlTypE tp2
+    DataInsDecl i dn tp qs dr        -> []
+    GDataInsDecl i dn tp knd gds dr  -> []
+    ClassDecl i ctx hd fds cds       -> []
+    InstDecl i ctx ihd  ids          -> []
+    DerivDecl i ctx ihd              -> []
+    InfixDecl i ass l ops            -> []
+    DefaultDecl i tp                 -> []
+    SpliceDecl i exp                 -> []
+    TypeSig i ns tp                  -> []
+    FunBind i ms                     -> []
+    PatBind i p mtp rhs bnds         -> []
+    ForImp i cv sfty s nm tp         -> []
+    ForExp i cv s nm tp              -> []
+    RulePragmaDecl i r               -> []
+    DeprPragmaDecl i ds              -> []
+    WarnPragmaDecl i ds              -> []
+    InlineSig i b act qnm            -> []
+    InlineConlikeSig i act qnm       -> []
+    SpecSig i act qnm tp             -> []
+    SpecInlineSig i b act qnm tp     -> []
+    InstSig i ctx ihd                -> []
+    AnnPragma i ann                  -> []
 
 hlDeclHead :: DeclHead SPI -> [Highlight]
 hlDeclHead x = case x of
@@ -290,14 +320,108 @@ hlDeclHead x = case x of
 
 hlTyVarBind :: TyVarBind SPI -> [Highlight]
 hlTyVarBind x = case x of
-    KindedVar i nm kd   -> [hlName True nm] ++ hlKind kd 
-    UnkindedVar i nm    -> [hlName True nm]
+    KindedVar i nm kd   -> zipWith ($) (zipWith ($) (repeat hlSrcSpan) [HlBrace, HlKeyword, HlBrace]) (srcInfoPoints i) ++ [hlName True nm] ++ hlKind kd 
+    UnkindedVar _ nm    -> [hlName True nm]
+
 
 hlKind :: Kind SPI -> [Highlight]
 hlKind x = case x of
     KindStar i          -> [hlSrcSpanInfo HlOpType i]
     KindBang i          -> [hlSrcSpanInfo HlOpType i]
-    KindFn i k1 k2      -> trace (("KindFn\n" ++ ) . prty . show $ i) $ (hlKind k1 ++ hlKind k2)
-    KindParen i k       -> trace (("KindParen\n" ++ ) . prty . show $ i) $ hlKind k 
+    KindFn i k1 k2      -> (hlSrcSpan HlKeyword . head . srcInfoPoints $ i) : (hlKind k1 ++ hlKind k2)
+    KindParen i k       -> hlBracedListPunc i ++  hlKind k 
     KindVar i n         -> [hlName True n]
 
+hlTypE :: Type SPI -> [Highlight]
+hlTypE x = case x of
+    TyForall i tvb ctx tp -> (map (hlSrcSpan HlKeyword) . srcInfoPoints $ i)  
+                          ++ maybe [] (concatMap hlTyVarBind) tvb 
+                          ++ hlContext ctx 
+                          ++ hlTypE tp
+    TyFun i tp1 tp2       -> (hlSrcSpan HlKeyword . head . srcInfoPoints $ i) 
+                          :  hlTypE tp1 
+                          ++ hlTypE tp2
+    TyTuple i _ tps       -> hlBracedListPunc i ++ concatMap hlTypE tps
+    TyList i tp           -> hlBracedListPunc i ++ (hlTypE tp)
+    TyApp _ tp1 tp2       -> hlTypE tp1 ++ hlTypE tp2
+    TyVar _ nm            -> [hlName True nm]
+    TyCon _ qn            -> hlQName True qn
+    TyParen i tp          -> hlBracedListPunc i ++ (hlTypE tp)
+    TyInfix i tp1 qn tp2  -> trace (("TyInfix - "++) . prty . show $ i) (hlTypE tp1 ++ hlQName True qn ++ hlTypE tp2)
+    TyKind i tp kd        -> trace (("TyKind - "++) . prty . show $ i) (hlTypE tp ++ hlKind kd)
+
+
+hlContext :: Maybe (Context SPI) -> [Highlight]
+hlContext x = case x of
+    Just (CxSingle i ass) -> _punc i ++ hlAsst ass
+    Just (CxTuple i ass)  -> _punc i ++ concatMap hlAsst ass
+    Just (CxParen i ctx)  -> _punc i ++ hlContext (Just ctx)
+    Just (CxEmpty i)      -> trace (("CxEmpty - " ++ ) . prty . show $ i) []
+    _                     -> []
+    where _punc  = uncurry (:) . (hlSrcSpan HlKeyword . last &&& select null (const []) hlBracedListPunc' . init) . srcInfoPoints 
+   
+hlAsst :: Asst SPI -> [Highlight]
+hlAsst x = case x of
+    ClassA i qn  tps -> hlQName True qn ++ concatMap hlTypE tps
+    InfixA i tp1 qn tp2 -> hlTypE tp1 ++ hlQName True qn ++ hlTypE tp2
+    IParam i ipn tp -> hlIPName ipn : hlTypE tp
+    EqualP i tp1 tp2 -> hlTypE tp1 ++ hlTypE tp2
+
+hlIPName :: IPName SPI -> Highlight
+hlIPName x = case x of
+    IPDup i s -> trace (("IPDup - " ++ ) . prty . show $ i) $ hlSrcSpanInfo HlIdentType i
+    IPLin i s -> trace (("IPLin - " ++ ) . prty . show $ i) $ hlSrcSpanInfo HlIdentType i
+
+hlDataOrNew :: DataOrNew SPI -> Highlight
+hlDataOrNew x = case x of
+    DataType i -> hlSrcSpanInfo HlKeyword i
+    NewType i -> hlSrcSpanInfo HlKeyword i
+
+hlQualConDecl :: QualConDecl SPI -> [Highlight]
+hlQualConDecl (QualConDecl i tvb ctx cdecl) = -- tracePrtyMsg "hlQualConDecl" i 
+                                            maybe [] (concatMap hlTyVarBind) tvb 
+                                            ++ hlContext ctx 
+                                            ++ hlConDecl cdecl
+                                            ++ if isJust tvb  then map (hlSrcSpan HlKeyword) . srcInfoPoints $ i else []
+                                            -- ++ (select null (const []) hlBracedListPunc' . srcInfoPoints $ i)
+
+hlDeriving :: Maybe (Deriving SPI) -> [Highlight]
+hlDeriving x = case x of
+    Just (Deriving i ihs) -> (uncurry (:) . (hlSrcSpan HlKeyword . head &&& select null (const []) hlBracedListPunc' . drop 1) . srcInfoPoints $ i)
+                          ++ concatMap hlInstanceHead ihs
+    _ -> []
+
+hlInstanceHead :: InstHead SPI -> [Highlight]
+hlInstanceHead x = case x of
+    IHead i qn tps          -> {-tracePrtyMsg "IHead"   i -}hlQName True qn ++ concatMap hlTypE tps
+    IHInfix i tp1 qn tp2    -> {-tracePrtyMsg "IHInfix" i -}hlTypE tp1 ++ hlQName True qn ++ hlTypE tp2
+    IHParen i ih            -> {-tracePrtyMsg "IHParen" i -}hlBracedListPunc i ++ hlInstanceHead ih
+
+hlConDecl :: ConDecl SPI -> [Highlight]
+hlConDecl x = case x of 
+    ConDecl i nm bgts           -> -- tracePrtyMsg "ConDecl" i 
+                                   hlName True nm 
+                                   : concatMap hlBangType bgts
+    InfixConDecl i bgt1 nm bgt2 -> -- tracePrtyMsg "InfixConDecl" i
+                                   hlName True nm 
+                                   : hlBangType bgt1
+                                   ++ hlBangType bgt2
+    RecDecl i nm flds           -> -- tracePrtyMsg "RecDecl" i 
+                                   hlName True nm 
+                                   : hlBracedListPunc i 
+                                   ++ concatMap hlFieldDecl flds
+
+hlFieldDecl :: FieldDecl SPI -> [Highlight]
+hlFieldDecl (FieldDecl i nms bgt) = -- tracePrtyMsg "FieldDecl" i 
+                                    (hlSrcSpan HlKeyword . last . srcInfoPoints $ i)
+                                    : (map (hlSrcSpan HlComma) . init . srcInfoPoints $ i)
+                                    ++ map (hlName True) nms ++ hlBangType bgt
+
+hlBangType :: BangType SPI -> [Highlight]
+hlBangType x = case x of
+    BangedTy i tp   -> (hlSrcSpan HlKeyword . head . srcInfoPoints $ i) : hlTypE tp
+    UnBangedTy _ tp -> hlTypE tp
+    UnpackedTy i tp -> tracePrtyMsg "UnpackedTy" i  hlTypE tp
+
+hlGadtDecl :: GadtDecl SPI -> [Highlight]
+hlGadtDecl (GadtDecl i nm tp) = (hlSrcSpan HlKeyword . head . srcInfoPoints $ i) : hlName True nm : hlTypE tp

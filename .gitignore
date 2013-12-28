@@ -10,3 +10,7 @@ cabal-dev
 /.cabal-sandbox
 /cabal.sandbox.config
 /ghc-edit.dll
+
+/test/Data/tags
+
+/tags

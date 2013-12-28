@@ -15,7 +15,7 @@ Library
     GHC-Options:        -Wall
     Exposed-Modules:    Language.Haskell.GhcEdit
 --    Other-Modules:      
-    build-depends:      base >= 4.0 && < 5, ghc-mod, haskell-src-exts, ghc, Cabal
+    build-depends:      base >= 4.0 && < 5, ghc-mod, haskell-src-exts, ghc, Cabal, safe, cond
 
 Executable ghc-edit
     Default-Language:    Haskell2010
@@ -35,4 +35,4 @@ Test-Suite test
     HS-Source-Dirs:     test
     test-module:        Test
     other-modules:      Exp
-    build-depends:      base, ghc-edit, haskell-src-exts, Cabal >= 1.9.2, GenericPretty, containers
+    build-depends:      base, ghc-edit, haskell-src-exts, Cabal >= 1.9.2, GenericPretty, containers, safe, cond
